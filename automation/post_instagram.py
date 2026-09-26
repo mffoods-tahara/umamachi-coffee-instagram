@@ -1,4 +1,4 @@
-"""馬町珈琲 Instagram 自動投稿（画像ローテ + AIキャプション）。"""
+"""馬町珈琲 Instagram 自動投稿（画像ローテ + 文面テンプレ）。"""
 from __future__ import annotations
 
 import json
@@ -11,8 +11,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from generate_caption import generate_caption
-from images import BASE_URL, IMAGES, IMAGES_DIR
+from images import BASE_URL, IMAGES
+from templates import TEMPLATES
 
 BASE_DIR = Path(__file__).parent
 STATE_FILE = BASE_DIR / "state.json"
@@ -34,7 +34,7 @@ logging.basicConfig(
 def load_state() -> dict:
     if STATE_FILE.exists():
         return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    return {"image_index": -1, "posted": []}
+    return {"image_index": -1, "caption_index": -1, "posted": []}
 
 
 def save_state(state: dict) -> None:
@@ -62,10 +62,13 @@ def wait_until_ready(creation_id: str, access_token: str, timeout: int = 90) -> 
     raise TimeoutError("メディア処理がタイムアウトしました")
 
 
-def append_caption_log(image_name: str, caption: str, media_id: str | None) -> None:
+def append_caption_log(
+    image_name: str, caption_index: int, caption: str, media_id: str | None
+) -> None:
     record = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "image": image_name,
+        "caption_index": caption_index,
         "caption": caption,
         "media_id": media_id,
     }
@@ -74,7 +77,7 @@ def append_caption_log(image_name: str, caption: str, media_id: str | None) -> N
 
 
 def main() -> None:
-    required = ["IG_ACCESS_TOKEN", "IG_USER_ID", "OPENAI_API_KEY"]
+    required = ["IG_ACCESS_TOKEN", "IG_USER_ID"]
     missing = [name for name in required if not os.getenv(name)]
     if missing:
         msg = f".env / Secrets に次を設定してください: {', '.join(missing)}"
@@ -87,18 +90,18 @@ def main() -> None:
 
     state = load_state()
     image_index = (state.get("image_index", -1) + 1) % len(IMAGES)
+    caption_index = (state.get("caption_index", -1) + 1) % len(TEMPLATES)
     image_name = IMAGES[image_index]
-    image_path = IMAGES_DIR / image_name
     image_url = BASE_URL + image_name
+    caption = TEMPLATES[caption_index]
 
-    print(f"[{datetime.now()}] 対象画像: {image_name}")
-    caption = generate_caption(image_path)
-    print("--- 生成キャプション ---")
+    print(f"[{datetime.now()}] 対象画像: {image_name} / 文面#{caption_index}")
+    print("--- キャプション ---")
     print(caption)
-    print("----------------------")
+    print("-------------------")
 
     if dry_run:
-        append_caption_log(image_name, caption, None)
+        append_caption_log(image_name, caption_index, caption, None)
         print("DRY_RUN=1 のため投稿をスキップしました")
         return
 
@@ -130,14 +133,22 @@ def main() -> None:
             {
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "image": image_name,
+                "caption_index": caption_index,
                 "media_id": media_id,
             }
         )
-        save_state({"image_index": image_index, "posted": posted[-60:]})
-        append_caption_log(image_name, caption, media_id)
+        save_state(
+            {
+                "image_index": image_index,
+                "caption_index": caption_index,
+                "posted": posted[-60:],
+            }
+        )
+        append_caption_log(image_name, caption_index, caption, media_id)
         logging.info(
-            "投稿成功 (image=%s, media_id=%s)",
+            "投稿成功 (image=%s, caption#%d, media_id=%s)",
             image_name,
+            caption_index,
             media_id,
         )
         print(f"[{datetime.now()}] 投稿成功: {image_name} media_id={media_id}")
